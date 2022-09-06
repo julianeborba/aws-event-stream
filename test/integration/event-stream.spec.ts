@@ -4,9 +4,12 @@ jest.setTimeout(1000000);
 
 import * as AWS from "aws-sdk";
 import { SQS } from "aws-sdk";
+import { DocumentClient } from 'aws-sdk/clients/dynamodb';
 import { Config, DynamodbProvider, EventStore } from "../../src";
 import { AWSConfig } from "../../src/aws/config";
 import { SNSPublisher } from "../../src/publisher/sns";
+import DynamoDB = require('aws-sdk/clients/dynamodb');
+
 
 describe.only('EventStream', () => {
 
@@ -41,7 +44,7 @@ describe.only('EventStream', () => {
     });
 
     const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
+    
     it('publish a message', async () => {
 
         // const params = {
@@ -156,4 +159,109 @@ describe.only('EventStream', () => {
         });
         expect(events[0].sequence).toEqual(0);
     });
+
+    it('should not put item in dynamo when eventType alredy exists', async () => {
+        const documentClient: DocumentClient = new DynamoDB.DocumentClient({ endpoint: 'http://localhost:4566' });
+
+        const record = {
+            ConditionExpression: '(attribute_not_exists(aggregation_streamid) AND attribute_not_exists(eventType.PAYED))',
+            Item: {
+            aggregation_streamid: 'orders:11',
+            commitTimestamp: 1611206813,
+            eventType: 'SENT',
+            payload: {
+                eventType: 'SENT',
+                text: 'EVENT PAYLOAD',
+            },
+            stream: {
+                aggregation: 'orders',
+                id: '1',
+            },
+            },
+            TableName: 'order-events',
+        };
+
+        const payedRecord = {
+            ConditionExpression: '(attribute_not_exists(aggregation_streamid) AND attribute_not_exists(eventType.PAYED))',
+            Item: {
+            aggregation_streamid: 'orders:11',
+            commitTimestamp: 1611206823,
+            eventType: 'PAYED',
+            payload: {
+                eventType: 'PAYED',
+                text: 'EVENT PAYLOAD',
+            },
+            stream: {
+                aggregation: 'orders',
+                id: '1',
+            },
+            },
+            TableName: 'order-events',
+        };
+
+
+        const putSentEventType = await documentClient.put(record).promise();
+        const putPayedEventType = await documentClient.put(payedRecord).promise();
+
+        expect(putSentEventType).not.toBe(null);
+        expect(putPayedEventType).not.toBe(null);
+        await expect(documentClient.put(payedRecord).promise()).rejects.toThrowError();
+    });
+
+  it.only('Xshould not put item in dynamo when eventType alredy exists', async () => {
+
+    const dynamodbConfig: Config = {
+        awsConfig: awsConfig,
+        dynamodb: {
+            endpointUrl: 'http://localhost:4566',
+            tableName: 'order-events',
+            conditionExpression: '(attribute_not_exists(eventType) AND attribute_not_exists(eventType.PAYED))'
+        },
+    };
+
+    const eventStore = new EventStore(
+        new DynamodbProvider(dynamodbConfig)
+    );
+   
+    const record = {
+        aggregation_streamid: 'orders:20',
+        document: {
+            identifier: '321'
+        },
+        eventType: 'SENT',
+        proposal: {
+            id: '123',
+            offer: 'new-offer'
+        },
+        version: 1,
+    };
+
+    const payedRecord = {
+        aggregation_streamid: 'orders:20',
+        document: {
+            identifier: '321'
+        },
+        eventType: 'PAYED',
+        proposal: {
+            id: '123',
+            offer: 'new-offer'
+        },
+        version: 1,
+    };
+
+
+
+    await eventStore.getEventStream('orders', '20').addEvent(record);
+
+    const events = await eventStore.getEventStream('orders', '20').getEvents();
+    console.log(' verificacao 1', events);
+    //expect(events.length).toEqual(1);
+
+
+    await eventStore.getEventStream('orders', '20').addEvent(payedRecord);
+    const events2 = await eventStore.getEventStream('orders', '20').getEvents();
+    console.log('verificacao 2', events2);
+
+    await expect(eventStore.getEventStream('orders', '20').addEvent(payedRecord)); //.rejects.toThrowError();
+  });
 });
